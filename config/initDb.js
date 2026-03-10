@@ -105,11 +105,20 @@ async function initializeDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_uuid UUID DEFAULT gen_random_uuid();
       ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_color VARCHAR(20) DEFAULT '#6C63FF';
       
-      ALTER TABLE events ADD COLUMN IF NOT EXISTS is_lead BOOLEAN DEFAULT false;
       ALTER TABLE events ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
       ALTER TABLE events ALTER COLUMN user_id DROP NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS system_config (
+        key VARCHAR(100) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      
+      INSERT INTO system_config (key, value) 
+      VALUES ('frontend_url', 'http://localhost:8081') 
+      ON CONFLICT (key) DO NOTHING;
     `);
-    console.log('✅ Updated users and events tables with new columns');
+    console.log('✅ Updated users, events, and system_config tables');
 
     console.log('🎉 Database initialization complete!');
   } catch (error) {

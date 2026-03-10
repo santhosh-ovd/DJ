@@ -58,6 +58,9 @@ router.post('/register', async (req, res) => {
       { expiresIn: '30d' }
     );
 
+    const configRes = await pool.query("SELECT value FROM system_config WHERE key = 'frontend_url'");
+    const frontendUrl = configRes.rows[0]?.value || 'http://localhost:8081';
+
     res.status(201).json({
       message: 'Account created successfully!',
       user: {
@@ -69,6 +72,7 @@ router.post('/register', async (req, res) => {
         isApproved: user.is_approved,
         partnerUuid: user.partner_uuid,
         themeColor: user.theme_color,
+        frontendUrl,
       },
       token,
     });
@@ -112,6 +116,9 @@ router.post('/login', async (req, res) => {
       { expiresIn: '30d' }
     );
 
+    const configRes = await pool.query("SELECT value FROM system_config WHERE key = 'frontend_url'");
+    const frontendUrl = configRes.rows[0]?.value || 'http://localhost:8081';
+
     res.json({
       message: 'Login successful!',
       user: {
@@ -123,6 +130,7 @@ router.post('/login', async (req, res) => {
         isApproved: user.is_approved,
         partnerUuid: user.partner_uuid,
         themeColor: user.theme_color,
+        frontendUrl,
       },
       token,
     });
@@ -145,6 +153,9 @@ router.get('/profile', authMiddleware, async (req, res) => {
     }
 
     const user = result.rows[0];
+    const configRes = await pool.query("SELECT value FROM system_config WHERE key = 'frontend_url'");
+    const frontendUrl = configRes.rows[0]?.value || 'http://localhost:8081';
+
     res.json({
       id: user.id,
       username: user.username,
@@ -154,6 +165,7 @@ router.get('/profile', authMiddleware, async (req, res) => {
       isApproved: user.is_approved,
       partnerUuid: user.partner_uuid,
       themeColor: user.theme_color,
+      frontendUrl,
       createdAt: user.created_at,
     });
   } catch (error) {
