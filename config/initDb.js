@@ -104,6 +104,7 @@ async function initializeDatabase() {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS is_approved BOOLEAN DEFAULT false;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_uuid UUID DEFAULT gen_random_uuid();
       ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_color VARCHAR(20) DEFAULT '#6C63FF';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_domain TEXT;
       
       ALTER TABLE events ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
       ALTER TABLE events ALTER COLUMN user_id DROP NOT NULL;

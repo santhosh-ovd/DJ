@@ -45,7 +45,7 @@ router.post('/register', async (req, res) => {
     const isApproved = role === 'superadmin'; // Superadmin is auto-approved
 
     const result = await pool.query(
-      'INSERT INTO users (username, password, full_name, phone, role, is_approved) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, username, full_name, phone, role, is_approved, partner_uuid, theme_color, created_at',
+      'INSERT INTO users (username, password, full_name, phone, role, is_approved) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, username, full_name, phone, role, is_approved, partner_uuid, theme_color, custom_domain, created_at',
       [username.toLowerCase(), hashedPassword, fullName || null, phone || null, role, isApproved]
     );
 
@@ -72,6 +72,7 @@ router.post('/register', async (req, res) => {
         isApproved: user.is_approved,
         partnerUuid: user.partner_uuid,
         themeColor: user.theme_color,
+        customDomain: user.custom_domain,
         frontendUrl,
       },
       token,
@@ -130,6 +131,7 @@ router.post('/login', async (req, res) => {
         isApproved: user.is_approved,
         partnerUuid: user.partner_uuid,
         themeColor: user.theme_color,
+        customDomain: user.custom_domain,
         frontendUrl,
       },
       token,
@@ -144,7 +146,7 @@ router.post('/login', async (req, res) => {
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, full_name, phone, role, is_approved, partner_uuid, theme_color, created_at FROM users WHERE id = $1',
+      'SELECT id, username, full_name, phone, role, is_approved, partner_uuid, theme_color, custom_domain, created_at FROM users WHERE id = $1',
       [req.userId]
     );
 
@@ -165,6 +167,7 @@ router.get('/profile', authMiddleware, async (req, res) => {
       isApproved: user.is_approved,
       partnerUuid: user.partner_uuid,
       themeColor: user.theme_color,
+      customDomain: user.custom_domain,
       frontendUrl,
       createdAt: user.created_at,
     });
@@ -184,7 +187,7 @@ router.get('/admins', authMiddleware, async (req, res) => {
     }
 
     const result = await pool.query(
-      'SELECT id, username, full_name, phone, role, is_approved, theme_color, created_at FROM users WHERE role = $1 ORDER BY created_at DESC',
+      'SELECT id, username, full_name, phone, role, is_approved, theme_color, custom_domain, created_at FROM users WHERE role = $1 ORDER BY created_at DESC',
       ['admin']
     );
 
@@ -196,6 +199,7 @@ router.get('/admins', authMiddleware, async (req, res) => {
       role: row.role,
       isApproved: row.is_approved,
       themeColor: row.theme_color,
+      customDomain: row.custom_domain,
       createdAt: row.created_at,
     })));
   } catch (error) {
@@ -249,6 +253,79 @@ router.patch('/admins/:id/theme', authMiddleware, async (req, res) => {
     res.json({ message: 'Partner theme updated successfully', themeColor });
   } catch (error) {
     console.error('Update partner theme error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ==================== UPDATE PARTNER SETTINGS (Super Admin only) ====================
+router.patch('/admins/:id/settings', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { themeColor, customDomain } = req.body;
+
+    // Check if requester is superadmin
+    const requester = await pool.query('SELECT role FROM users WHERE id = $1', [req.userId]);
+    if (requester.rows[0].role !== 'superadmin') {
+      return res.status(403).json({ error: 'Only superadmins can update partner settings' });
+    }
+
+    const updates = [];
+    const values = [];
+    let valIdx = 1;
+
+    if (themeColor !== undefined) {
+      updates.push(`theme_color = $${valIdx++}`);
+      values.push(themeColor);
+    }
+
+    if (customDomain !== undefined) {
+      updates.push(`custom_domain = $${valIdx++}`);
+      values.push(customDomain);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No settings provided to update' });
+    }
+
+    values.push(id);
+    values.push('admin');
+
+    await pool.query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${valIdx++} AND role = $${valIdx++}`,
+      values
+    );
+
+    res.json({ message: 'Partner settings updated successfully', themeColor, customDomain });
+  } catch (error) {
+    console.error('Update partner settings error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ==================== UPDATE SYSTEM CONFIG (Super Admin only) ====================
+router.patch('/system-config', authMiddleware, async (req, res) => {
+  try {
+    const { key, value } = req.body;
+
+    if (!key || value === undefined) {
+      return res.status(400).json({ error: 'Key and value are required' });
+    }
+
+    // Check if requester is superadmin
+    const requester = await pool.query('SELECT role FROM users WHERE id = $1', [req.userId]);
+    if (requester.rows[0].role !== 'superadmin') {
+      return res.status(403).json({ error: 'Only superadmins can update system settings' });
+    }
+
+    await pool.query(
+      'INSERT INTO system_config (key, value, updated_at) VALUES ($1, $2, CURRENT_TIMESTAMP) ' +
+      'ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP',
+      [key, value]
+    );
+
+    res.json({ message: `System setting '${key}' updated successfully`, key, value });
+  } catch (error) {
+    console.error('Update system config error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
