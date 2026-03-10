@@ -39,16 +39,21 @@ router.post('/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, salt);
 
     // Create user
+    // First user is superadmin, others are admin and need approval
+    const userCount = await pool.query('SELECT COUNT(*) FROM users');
+    const role = parseInt(userCount.rows[0].count) === 0 ? 'superadmin' : 'admin';
+    const isApproved = role === 'superadmin'; // Superadmin is auto-approved
+
     const result = await pool.query(
-      'INSERT INTO users (username, password, full_name, phone) VALUES ($1, $2, $3, $4) RETURNING id, username, full_name, phone, created_at',
-      [username.toLowerCase(), hashedPassword, fullName || null, phone || null]
+      'INSERT INTO users (username, password, full_name, phone, role, is_approved) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, username, full_name, phone, role, is_approved, partner_uuid, theme_color, created_at',
+      [username.toLowerCase(), hashedPassword, fullName || null, phone || null, role, isApproved]
     );
 
     const user = result.rows[0];
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, username: user.username },
+      { userId: user.id, username: user.username, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
@@ -60,6 +65,10 @@ router.post('/register', async (req, res) => {
         username: user.username,
         fullName: user.full_name,
         phone: user.phone,
+        role: user.role,
+        isApproved: user.is_approved,
+        partnerUuid: user.partner_uuid,
+        themeColor: user.theme_color,
       },
       token,
     });
@@ -98,7 +107,7 @@ router.post('/login', async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, username: user.username },
+      { userId: user.id, username: user.username, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
@@ -110,6 +119,10 @@ router.post('/login', async (req, res) => {
         username: user.username,
         fullName: user.full_name,
         phone: user.phone,
+        role: user.role,
+        isApproved: user.is_approved,
+        partnerUuid: user.partner_uuid,
+        themeColor: user.theme_color,
       },
       token,
     });
@@ -123,7 +136,7 @@ router.post('/login', async (req, res) => {
 router.get('/profile', authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, full_name, phone, created_at FROM users WHERE id = $1',
+      'SELECT id, username, full_name, phone, role, is_approved, partner_uuid, theme_color, created_at FROM users WHERE id = $1',
       [req.userId]
     );
 
@@ -137,6 +150,10 @@ router.get('/profile', authMiddleware, async (req, res) => {
       username: user.username,
       fullName: user.full_name,
       phone: user.phone,
+      role: user.role,
+      isApproved: user.is_approved,
+      partnerUuid: user.partner_uuid,
+      themeColor: user.theme_color,
       createdAt: user.created_at,
     });
   } catch (error) {
@@ -145,25 +162,81 @@ router.get('/profile', authMiddleware, async (req, res) => {
   }
 });
 
-// ==================== REGISTER DEVICE (OneSignal Player ID) ====================
-router.post('/device', authMiddleware, async (req, res) => {
+// ==================== GET ALL ADMINS (Super Admin only) ====================
+router.get('/admins', authMiddleware, async (req, res) => {
   try {
-    const { playerId, deviceType } = req.body;
+    // Check if requester is superadmin
+    const requester = await pool.query('SELECT role FROM users WHERE id = $1', [req.userId]);
+    if (requester.rows[0].role !== 'superadmin') {
+      return res.status(403).json({ error: 'Only superadmins can manage admins' });
+    }
 
-    if (!playerId) {
-      return res.status(400).json({ error: 'Player ID is required' });
+    const result = await pool.query(
+      'SELECT id, username, full_name, phone, role, is_approved, theme_color, created_at FROM users WHERE role = $1 ORDER BY created_at DESC',
+      ['admin']
+    );
+
+    res.json(result.rows.map(row => ({
+      id: row.id,
+      username: row.username,
+      fullName: row.full_name,
+      phone: row.phone,
+      role: row.role,
+      isApproved: row.is_approved,
+      themeColor: row.theme_color,
+      createdAt: row.created_at,
+    })));
+  } catch (error) {
+    console.error('Get admins error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ==================== APPROVE ADMIN (Super Admin only) ====================
+router.patch('/admins/:id/approve', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if requester is superadmin
+    const requester = await pool.query('SELECT role FROM users WHERE id = $1', [req.userId]);
+    if (requester.rows[0].role !== 'superadmin') {
+      return res.status(403).json({ error: 'Only superadmins can approve admins' });
     }
 
     await pool.query(
-      `INSERT INTO user_devices (user_id, onesignal_player_id, device_type)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (user_id, onesignal_player_id) DO NOTHING`,
-      [req.userId, playerId, deviceType || 'mobile']
+      'UPDATE users SET is_approved = true WHERE id = $1 AND role = $2',
+      [id, 'admin']
     );
 
-    res.json({ message: 'Device registered successfully' });
+    res.json({ message: 'Admin approved successfully' });
   } catch (error) {
-    console.error('Device register error:', error);
+    console.error('Approve admin error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ==================== UPDATE PARTNER THEME (Super Admin only) ====================
+router.patch('/admins/:id/theme', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { themeColor } = req.body;
+
+    if (!themeColor) return res.status(400).json({ error: 'themeColor is required' });
+
+    // Check if requester is superadmin
+    const requester = await pool.query('SELECT role FROM users WHERE id = $1', [req.userId]);
+    if (requester.rows[0].role !== 'superadmin') {
+      return res.status(403).json({ error: 'Only superadmins can update partner settings' });
+    }
+
+    await pool.query(
+      'UPDATE users SET theme_color = $1 WHERE id = $2 AND role = $3',
+      [themeColor, id, 'admin']
+    );
+
+    res.json({ message: 'Partner theme updated successfully', themeColor });
+  } catch (error) {
+    console.error('Update partner theme error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

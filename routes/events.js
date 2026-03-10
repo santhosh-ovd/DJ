@@ -5,8 +5,131 @@ const { schedulePushNotification, cancelNotification } = require('../services/on
 
 const router = express.Router();
 
-// All routes require authentication
+// ==================== PUBLIC: BOOK EVENT (LEAD) ====================
+router.post('/public/book', async (req, res) => {
+  try {
+    const {
+      eventType, clientName, clientPhone, venue, address,
+      date, startTime, endTime, notes, partnerUuid
+    } = req.body;
+
+    if (!clientName || !date) {
+      return res.status(400).json({ error: 'Client name and date are required' });
+    }
+
+    // Lookup user_id from partnerUuid
+    let finalUserId = null;
+    if (partnerUuid) {
+      const userResult = await pool.query('SELECT id FROM users WHERE partner_uuid = $1', [partnerUuid]);
+      if (userResult.rows.length > 0) {
+        finalUserId = userResult.rows[0].id;
+      }
+    }
+
+    const result = await pool.query(
+      `INSERT INTO events (
+        user_id, event_type, client_name, client_phone, venue, address,
+        event_date, start_time, end_time, status, is_lead, notes
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      RETURNING *`,
+      [
+        finalUserId,
+        eventType || 'other', clientName, clientPhone || null,
+        venue || null, address || null, date,
+        startTime || null, endTime || null,
+        'pending', true, notes || null,
+      ]
+    );
+
+    res.status(201).json({
+      message: 'Booking request sent successfully! An admin will contact you soon.',
+      leadId: result.rows[0].id,
+    });
+  } catch (error) {
+    console.error('Public book error:', error);
+    res.status(500).json({ error: 'Failed to submit booking request' });
+  }
+});
+
+// All other routes require authentication
 router.use(authMiddleware);
+
+// ==================== ADMIN: GET ALL LEADS ====================
+router.get('/leads', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT e.*,
+        COALESCE(
+          json_agg(
+            json_build_object('id', el.labour_id)
+          ) FILTER (WHERE el.labour_id IS NOT NULL),
+          '[]'
+        ) as assigned_labourers
+      FROM events e
+      LEFT JOIN event_labours el ON e.id = el.event_id
+      WHERE e.is_lead = true AND (e.user_id = $1 OR $2 = 'superadmin')
+      GROUP BY e.id
+      ORDER BY e.created_at DESC`,
+      [req.userId, req.userRole]
+    );
+
+    const leads = result.rows.map(row => ({
+      id: row.id,
+      eventType: row.event_type,
+      clientName: row.client_name,
+      clientPhone: row.client_phone,
+      venue: row.venue,
+      address: row.address,
+      date: row.event_date?.toISOString().split('T')[0],
+      startTime: row.start_time?.substring(0, 5),
+      endTime: row.end_time?.substring(0, 5),
+      totalAmount: parseFloat(row.total_amount) || 0,
+      advanceAmount: parseFloat(row.advance_amount) || 0,
+      shippingCharge: parseFloat(row.shipping_charge) || 0,
+      labourCharge: parseFloat(row.labour_charge) || 0,
+      assignedLabourers: row.assigned_labourers.map(l => l.id),
+      status: row.status,
+      isLead: row.is_lead,
+      notes: row.notes,
+      createdAt: row.created_at,
+    }));
+
+    res.json(leads);
+  } catch (error) {
+    console.error('Get leads error:', error);
+    res.status(500).json({ error: 'Failed to fetch leads' });
+  }
+});
+
+// ==================== ADMIN: APPROVE/REJECT LEAD ====================
+router.patch('/leads/:id/approve', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(
+      "UPDATE events SET is_lead = false, status = 'upcoming', user_id = $1 WHERE id = $2",
+      [req.userId, id]
+    );
+    res.json({ message: 'Lead converted to event successfully!' });
+  } catch (error) {
+    console.error('Approve lead error:', error);
+    res.status(500).json({ error: 'Failed to approve lead' });
+  }
+});
+
+router.patch('/leads/:id/reject', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    await pool.query(
+      "UPDATE events SET status = 'rejected', rejection_reason = $1 WHERE id = $2",
+      [reason, id]
+    );
+    res.json({ message: 'Lead rejected' });
+  } catch (error) {
+    console.error('Reject lead error:', error);
+    res.status(500).json({ error: 'Failed to reject lead' });
+  }
+});
 
 // ==================== GET ALL EVENTS ====================
 router.get('/', async (req, res) => {
@@ -21,10 +144,10 @@ router.get('/', async (req, res) => {
         ) as assigned_labourers
       FROM events e
       LEFT JOIN event_labours el ON e.id = el.event_id
-      WHERE e.user_id = $1
+      WHERE e.is_lead = false AND (e.user_id = $1 OR $2 = 'superadmin')
       GROUP BY e.id
       ORDER BY e.event_date DESC`,
-      [req.userId]
+      [req.userId, req.userRole]
     );
 
     const events = result.rows.map(row => ({
@@ -67,9 +190,9 @@ router.get('/:id', async (req, res) => {
         ) as assigned_labourers
       FROM events e
       LEFT JOIN event_labours el ON e.id = el.event_id
-      WHERE e.id = $1 AND e.user_id = $2
+      WHERE e.id = $1 AND (e.user_id = $2 OR $3 = 'superadmin')
       GROUP BY e.id`,
-      [req.params.id, req.userId]
+      [req.params.id, req.userId, req.userRole]
     );
 
     if (result.rows.length === 0) {
@@ -186,7 +309,10 @@ router.put('/:id', async (req, res) => {
     } = req.body;
 
     // Verify ownership
-    const existing = await pool.query('SELECT id FROM events WHERE id = $1 AND user_id = $2', [id, req.userId]);
+    const existing = await pool.query(
+      'SELECT id FROM events WHERE id = $1 AND (user_id = $2 OR $3 = $4)', 
+      [id, req.userId, req.userRole, 'superadmin']
+    );
     if (existing.rows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
@@ -208,12 +334,27 @@ router.put('/:id', async (req, res) => {
         status = COALESCE($13, status),
         notes = $14,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $15 AND user_id = $16
+      WHERE id = $15 AND (user_id = $16 OR $17 = $18)
       RETURNING *`,
       [
-        eventType, clientName, clientPhone, venue, address,
-        date, startTime, endTime, totalAmount, advanceAmount,
-        shippingCharge, labourCharge, status, notes, id, req.userId,
+        eventType, 
+        clientName, 
+        clientPhone || null, 
+        venue || null, 
+        address || null,
+        date, 
+        startTime || null, 
+        endTime || null, 
+        totalAmount, 
+        advanceAmount,
+        shippingCharge, 
+        labourCharge, 
+        status, 
+        notes || null, 
+        id, 
+        req.userId, 
+        req.userRole, 
+        'superadmin'
       ]
     );
 
@@ -272,8 +413,8 @@ router.delete('/:id', async (req, res) => {
     await cancelEventNotifications(id);
 
     const result = await pool.query(
-      'DELETE FROM events WHERE id = $1 AND user_id = $2 RETURNING id',
-      [id, req.userId]
+      'DELETE FROM events WHERE id = $1 AND (user_id = $2 OR $3 = $4) RETURNING id',
+      [id, req.userId, req.userRole, 'superadmin']
     );
 
     if (result.rows.length === 0) {

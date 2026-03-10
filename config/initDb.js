@@ -10,6 +10,8 @@ async function initializeDatabase() {
         password VARCHAR(255) NOT NULL,
         full_name VARCHAR(200),
         phone VARCHAR(20),
+        role VARCHAR(20) DEFAULT 'admin',
+        is_approved BOOLEAN DEFAULT false,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -19,7 +21,7 @@ async function initializeDatabase() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS events (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         event_type VARCHAR(50) NOT NULL DEFAULT 'other',
         client_name VARCHAR(200) NOT NULL,
         client_phone VARCHAR(20),
@@ -33,6 +35,8 @@ async function initializeDatabase() {
         shipping_charge DECIMAL(12,2) DEFAULT 0,
         labour_charge DECIMAL(12,2) DEFAULT 0,
         status VARCHAR(30) DEFAULT 'upcoming',
+        is_lead BOOLEAN DEFAULT false,
+        rejection_reason TEXT,
         notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -93,6 +97,19 @@ async function initializeDatabase() {
       );
     `);
     console.log('✅ User devices table ready');
+
+    // Add columns if they don't exist
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'admin';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_approved BOOLEAN DEFAULT false;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_uuid UUID DEFAULT gen_random_uuid();
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_color VARCHAR(20) DEFAULT '#6C63FF';
+      
+      ALTER TABLE events ADD COLUMN IF NOT EXISTS is_lead BOOLEAN DEFAULT false;
+      ALTER TABLE events ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+      ALTER TABLE events ALTER COLUMN user_id DROP NOT NULL;
+    `);
+    console.log('✅ Updated users and events tables with new columns');
 
     console.log('🎉 Database initialization complete!');
   } catch (error) {
