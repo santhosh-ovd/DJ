@@ -99,16 +99,31 @@ async function initializeDatabase() {
     console.log('✅ User devices table ready');
 
     // Add columns if they don't exist
-    await pool.query(`
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'admin';
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_approved BOOLEAN DEFAULT false;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_uuid UUID DEFAULT gen_random_uuid();
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_color VARCHAR(20) DEFAULT '#6C63FF';
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_domain TEXT;
-      
-      ALTER TABLE events ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
-      ALTER TABLE events ALTER COLUMN user_id DROP NOT NULL;
+    try {
+      await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto;');
+    } catch (e) {
+      console.log('Skipping pgcrypto extension creation (maybe already exists or no permission)');
+    }
 
+    const alterQueries = [
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'admin';",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_approved BOOLEAN DEFAULT false;",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_uuid UUID DEFAULT gen_random_uuid();",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_color VARCHAR(20) DEFAULT '#6C63FF';",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_domain TEXT;",
+      "ALTER TABLE events ADD COLUMN IF NOT EXISTS rejection_reason TEXT;",
+      "ALTER TABLE events ALTER COLUMN user_id DROP NOT NULL;"
+    ];
+
+    for (const q of alterQueries) {
+      try {
+        await pool.query(q);
+      } catch (err) {
+        console.log(`Log: Column/Alter already exists or failed: ${q.substring(0, 50)}... Error: ${err.message}`);
+      }
+    }
+
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS system_config (
         key VARCHAR(100) PRIMARY KEY,
         value TEXT NOT NULL,
@@ -119,6 +134,7 @@ async function initializeDatabase() {
       VALUES ('frontend_url', 'http://localhost:8081') 
       ON CONFLICT (key) DO NOTHING;
     `);
+
     console.log('✅ Updated users, events, and system_config tables');
 
     console.log('🎉 Database initialization complete!');

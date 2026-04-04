@@ -405,6 +405,40 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+router.patch('/:id/complete', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`[DEBUG] Mark as Completed - EventID: ${id}, UserID: ${req.userId}, Role: ${req.userRole}`);
+    
+    // Fetch the event to check ownership
+    const eventResult = await pool.query('SELECT user_id FROM events WHERE id = $1', [id]);
+    
+    if (eventResult.rows.length === 0) {
+      console.log(`[DEBUG] Event ${id} not found`);
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const event = eventResult.rows[0];
+    
+    // Permission check: owner or superadmin
+    if (event.user_id !== req.userId && req.userRole !== 'superadmin') {
+      console.log(`[DEBUG] Permission Denied: Event owner is ${event.user_id}, requester is ${req.userId}`);
+      return res.status(403).json({ error: 'You do not have permission to complete this event' });
+    }
+
+    await pool.query(
+      "UPDATE events SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+      [id]
+    );
+
+    console.log(`[DEBUG] Event ${id} successfully marked as completed`);
+    res.json({ message: 'Event marked as completed successfully!' });
+  } catch (error) {
+    console.error('[DEBUG] Complete event error ERROR:', error);
+    res.status(500).json({ error: 'Failed to mark event as completed', details: error.message });
+  }
+});
+
 // ==================== DELETE EVENT ====================
 router.delete('/:id', async (req, res) => {
   try {
